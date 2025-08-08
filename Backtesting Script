@@ -22,9 +22,10 @@ def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
                                               end=endDateTime)
     barsData = stock_client.get_stock_bars(dataParams) #For some reason the Alpaca Documentation is slightly weird i cant directly pluck the parameters into the .get_stock_bars function, it only accepts one argument
     return barsData.df.reset_index()
+data = getData(["AAPL","NVDA"], datetime(2023,1,4), datetime(2023,1,5))
 
 def buyStock(row, qty, price):
-    global purchaseDict, currentCash, buyCount
+    global purchaseDict, currentCash, buyCount, stockQTY
     if qty*price > currentCash:
         qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
     if qty != 0:
@@ -36,32 +37,47 @@ def buyStock(row, qty, price):
         pass
 
 def sellStock(row, qty, price):
-    global purchaseDict, salesDict, currentCash, sellCount
+    global purchaseDict, salesDict, currentCash, sellCount, stockQTY
     if stockQTY.get(row["symbol"]) < qty:
         qty = stockQTY.get(row["symbol"])
-    if qty !+ 0:
+    if qty != 0:
         currentCash += qty*price
         sellCount += 1
-        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit] #Yet to do: Compute profit based on FIFO. Remove stock from purchaseDict. Compute new number of open stock holdings
-    
+        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]  #Yet to do: Compute profit based on FIFO. Remove stock from purchaseDict. Compute new number of open stock holdings
+        
     pass
 
-def calculateAvgPrc(purchaseDict):
-    avgPrice = 0
-    for key, value in purchaseDict.items():
+def calculateAvgPrc(purchaseDict, stock):
+    global stockQTY
+    stocksList = sorted(data["symbol"].unique())
+    avgPriceDict = {}
+    for stock in stocksList:
         if len(purchaseDict) == 0:
             break
-        avgPrice += value[3]
-    avgPrice = avgPrice/len(purchaseDict)
-    return avgPrice
+        avgPrice = 0
+        for key, value in purchaseDict.items():
+            if value[0] == stock:
+                avgPrice += value[3]
+            else:
+                continue
+        avgPriceDict[value[0]] = avgPrice/len(stockQTY.get(stock))
+    return avgPriceDict
     
-def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code the strat here. Code of strategy would run iteratively for each row being iterated by the engine
-    if dataRow["close"] > dataRow["open"]:
-        buyStock("""insert Parameters""") #Strategy has yet to be coded
-    if dataRow["open"]
-
-def engineRun(startCash = 100000, data): #The main engine has not even been constructed.
-    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount
+def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code the strat here. Code of strategy would run iteratively for each row being iterated by the engine. This currently only accounts for one single stock traded
+    global stockQTY
+    for stock in data["symbol"].unique():
+        if dataRow["symbol"] != stock:
+            continue
+        else:
+            if dataRow["close"] > dataRow["open"]:
+                buyStock(dataRow, 5, dataRow["close"]) #just a simple strategy to act as a placeholder
+            if len(purchaseDict) != 0:
+                avgPriceDict = calculateAvgPrc(purchaseDict)
+            if avgPriceDict.get(dataRow["symbol"])*1.015 <= dataRow["high"]:
+                sellStock(dataRow, stockQTY.get(dataRow["symbol"]), avgPriceDict.get(dataRow["symbol"])*1.015)
+                
+def engineRun(startCash = 100000, data):
+    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY
     currentCash = startCash
     buyCount = 0
     sellCount = 0
