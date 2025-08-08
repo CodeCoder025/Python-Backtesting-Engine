@@ -1,0 +1,77 @@
+import os
+from alpaca.data import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from datetime import datetime
+import pandas as pd
+
+#Notes:
+"""Algorithm is allowed to purchase/sell stock at any price between the range of high and low. However, it cannot make this decision based on price information, nor can it make a sale AND a purchase in the same data row (ie the same minute).
+    This means that the algorithm is not allowed to "know" the high and low prices, thus can only make decisions in a "hit-or-miss" manner. E.g. algorithm cannot choose to buy where price = row["Low"], but can make a decision like buy where price = 98%(Open)."""
+#For future use --- row.name returns index of row
+#Next step for algorithm is to have it do simple trade analysis, as well as tell the user how much more(or less) they would have made if x extra money were put into the trading account when it holds positions till out of cash
+
+apiKey = os.getenv("AlpacaKey")
+apiSecret = os.getenv("AlpacaSecret")
+stock_client = StockHistoricalDataClient(apiKey, apiSecret)
+
+def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
+    dataParams = StockBarsRequest(symbol_or_symbols=stock,
+                                            timeframe=interval, 
+                                            start=startDateTime,
+                                              end=endDateTime)
+    barsData = stock_client.get_stock_bars(dataParams) #For some reason the Alpaca Documentation is slightly weird i cant directly pluck the parameters into the .get_stock_bars function, it only accepts one argument
+    return barsData.df.reset_index()
+
+def buyStock(row, qty, price):
+    global purchaseDict, currentCash, buyCount
+    if qty*price > currentCash:
+        qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
+    if qty != 0:
+        purchaseDict[row["timestamp"]] = [row["symbol"], row, qty, price]
+        currentCash -= qty*price
+        buyCount +=1
+        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) + qty
+    else:
+        pass
+
+def sellStock(row, qty, price):
+    global purchaseDict, salesDict, currentCash, sellCount
+    if stockQTY.get(row["symbol"]) < qty:
+        qty = stockQTY.get(row["symbol"])
+    if qty !+ 0:
+        currentCash += qty*price
+        sellCount += 1
+        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit] #Yet to do: Compute profit based on FIFO. Remove stock from purchaseDict. Compute new number of open stock holdings
+    
+    pass
+
+def calculateAvgPrc(purchaseDict):
+    avgPrice = 0
+    for key, value in purchaseDict.items():
+        if len(purchaseDict) == 0:
+            break
+        avgPrice += value[3]
+    avgPrice = avgPrice/len(purchaseDict)
+    return avgPrice
+    
+def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code the strat here. Code of strategy would run iteratively for each row being iterated by the engine
+    if dataRow["close"] > dataRow["open"]:
+        buyStock("""insert Parameters""") #Strategy has yet to be coded
+    if dataRow["open"]
+
+def engineRun(startCash = 100000, data): #The main engine has not even been constructed.
+    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount
+    currentCash = startCash
+    buyCount = 0
+    sellCount = 0
+    winningTradeCount = 0
+    stockQTY = {} #Key = Stock, Value = QTY
+    for stock in data["symbol"].unique():
+        stockQTY[stock] = 0
+    purchaseDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, PurchaseQTY, Price] ---- Row refers to the row of dataframe where stock is purchased
+    salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
+    avgPrice = calculateAvgPrc()
+
+#The logic behind this backtester can go two ways --- either have a static salesDict and purchaseDict where key-value pairs only get added, or have purchaseDict and salesDict to by dynamic to show current positions and total current sales
+#Ill try the second one for now. Logic --- strategy calls buyStock/sellStock function, which changes sales/purchase dict.
