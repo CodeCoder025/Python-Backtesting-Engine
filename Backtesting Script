@@ -25,21 +25,24 @@ def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
     return barsData.df.reset_index()
 data = getData(["AAPL","NVDA"], datetime(2023,1,4), datetime(2023,1,5))
 def buyStock(row, qty, price):
-    global purchaseDict, currentCash, buyCount, stockQTY
-    if qty*price > currentCash:
-        qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
-    if qty != 0:
-        purchaseDict[row["timestamp"]] = [row["symbol"], row, qty, price]
-        currentCash -= qty*price
-        buyCount +=1
-        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) + qty
-    else:
-        pass
+    global purchaseDict, currentCash, buyCount, stockQTY, buyStockCalled, sellStockCalled
+    if sellStockCalled == False:
+        if qty*price > currentCash:
+            qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
+        if qty != 0:
+            buyStockCalled = True
+            purchaseDict[row["timestamp"]] = [row["symbol"], row, qty, price]
+            currentCash -= qty*price
+            buyCount +=1
+            stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) + qty
+        else:
+            pass
 
 def calculateFIFOProfit(purchaseDict, salesDict, row, qty, price): #this function runs before sale is processed into salesDict!
     totalSold = 0
     netSold = 0
     totalPurchased = 0
+    unchangedQTY = qty
     for key, value in salesDict.items():
         if value[0] == row["symbol"]:
             totalSold += value[2]
@@ -63,22 +66,23 @@ def calculateFIFOProfit(purchaseDict, salesDict, row, qty, price): #this functio
             qty -= purchaseValues[continueFrom][2]
             FIFOcost += purchaseValues[continueFrom][2]*purchaseValues[continueFrom][3]
         else:
-            qty = 0
             FIFOcost += purchaseValues[continueFrom][3]*qty
-    profit = qty*price - FIFOcost
+            qty = 0
+    profit = unchangedQTY*price - FIFOcost
     return profit
 
 def sellStock(row, qty, price):
-    global purchaseDict, salesDict, currentCash, sellCount, stockQTY
-    if stockQTY.get(row["symbol"]) < qty:
-        qty = stockQTY.get(row["symbol"])
-    if qty != 0:
-        profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
-        currentCash += qty*price
-        sellCount += 1
-        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]
-        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
-    pass
+    global purchaseDict, salesDict, currentCash, sellCount, stockQTY, sellStockCalled, buyStockCalled #buystockcalled and sellstockcalled prevents model from buying and selling stock at the same candle
+    if buyStockCalled == False:
+        if stockQTY.get(row["symbol"]) < qty:
+            qty = stockQTY.get(row["symbol"])
+        if qty != 0:
+            sellStockCalled = True
+            profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
+            currentCash += qty*price
+            sellCount += 1
+            salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]
+            stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
 
 def calculateAvgPrc(purchaseDict):
     stocksList = sorted(data["symbol"].unique())
@@ -101,14 +105,17 @@ def calculateAvgPrc(purchaseDict):
         try:
             avgCost = totalCost/stockQTY.get(stock)
         except:
-            avgCost = "No Stock Owned"
+            avgCost = 0
         avgPriceDict[stock] = avgCost
     return avgPriceDict
                     
     
-def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code the strat here. Code of strategy would run iteratively for each row being iterated by the engine. This currently only accounts for one single stock traded
-    global stockQTY
+def strategy(startCash, currentCash, dataRow, currentPositions):
+    
+    global stockQTY, buyStockCalled, sellStockCalled
     for stock in data["symbol"].unique():
+        buyStockCalled = False
+        sellStockCalled = False
         if dataRow["symbol"] != stock:
             continue
         else:
@@ -118,6 +125,8 @@ def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code 
                 avgPriceDict = calculateAvgPrc(purchaseDict)
                 if avgPriceDict.get(dataRow["symbol"])*1.015 <= dataRow["high"]:
                     sellStock(dataRow, stockQTY.get(dataRow["symbol"]), avgPriceDict.get(dataRow["symbol"])*1.015)
+
+#def tradeAnalyser():
                 
 def engineRun(data, startCash = 100000):
     global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY
@@ -132,16 +141,23 @@ def engineRun(data, startCash = 100000):
     salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
     for index, row in data.iterrows():
         strategy(startCash, currentCash, row, stockQTY)
+    #tradeAnalyser()
 
+    return purchaseDict, salesDict, currentCash, stockQTY
+
+
+
+a,b,c,d = engineRun(data, 50000)
+for key, value in a.items():
+    a[key] = value[:1] + value[2:]
+for key, value in b.items():
+    b[key] = value[:1] + value[2:]    
+    
+print("Purchases:\n",a,"\n\nSales:\nb",b,"Cash Remaining:   ",c,"\n\nEnd Portfolio:\n",d)
 #The logic behind this backtester can go two ways --- either have a static salesDict and purchaseDict where key-value pairs only get added, or have purchaseDict and salesDict to by dynamic to show current positions and total current sales
 #Ill try the second one for now. Logic --- strategy calls buyStock/sellStock function, which changes sales/purchase dict.
-
-
 #Yet to do:
 """
 1) Post-Trade Statistics (e.g. total P/L? Number of Trades? Number of winning trades [this can be computed based on FIFO or Average-Based]?)
-2) More Complex Trading Strategy
-3) Model can currently buy and sell in the same time window (must eliminate so that scalping wont happen)
-4) PurchaseDict not updated if partial sale occurs (sell half of what was bought in a single purchase)
-5) 
+2) Tidy up results output
 """
