@@ -10,6 +10,7 @@ import pandas as pd
     This means that the algorithm is not allowed to "know" the high and low prices, thus can only make decisions in a "hit-or-miss" manner. E.g. algorithm cannot choose to buy where price = row["Low"], but can make a decision like buy where price = 98%(Open)."""
 #For future use --- row.name returns index of row
 #Next step for algorithm is to have it do simple trade analysis, as well as tell the user how much more(or less) they would have made if x extra money were put into the trading account when it holds positions till out of cash
+#FIFO profit vs average-based profit?
 
 apiKey = os.getenv("AlpacaKey")
 apiSecret = os.getenv("AlpacaSecret")
@@ -23,7 +24,6 @@ def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
     barsData = stock_client.get_stock_bars(dataParams) #For some reason the Alpaca Documentation is slightly weird i cant directly pluck the parameters into the .get_stock_bars function, it only accepts one argument
     return barsData.df.reset_index()
 data = getData(["AAPL","NVDA"], datetime(2023,1,4), datetime(2023,1,5))
-
 def buyStock(row, qty, price):
     global purchaseDict, currentCash, buyCount, stockQTY
     if qty*price > currentCash:
@@ -36,32 +36,75 @@ def buyStock(row, qty, price):
     else:
         pass
 
+def calculateFIFOProfit(purchaseDict, salesDict, row, qty, price): #this function runs before sale is processed into salesDict!
+    totalSold = 0
+    netSold = 0
+    totalPurchased = 0
+    for key, value in salesDict.items():
+        if value[0] == row["symbol"]:
+            totalSold += value[2]
+            netSold += value[2]
+    for key, value in purchaseDict.items():
+        if value[0] == row["symbol"]:
+            totalPurchased += value[2]
+            netSold -= value[2]
+        if netSold <= 0:
+            cutoffValue = value[3]
+            cutoffPoint = key
+            break
+    FIFOcost = netSold*(-1)*cutoffValue
+    qty -= netSold*(-1)
+    purchaseValues = list(purchaseDict.values()) #this is a 2D list
+    purchaseKeys = list(purchaseDict.keys())
+    continueFrom = purchaseKeys.index(cutoffPoint)-1
+    while qty > 0:
+        continueFrom += 1
+        if purchaseValues[continueFrom][2] < qty:
+            qty -= purchaseValues[continueFrom][2]
+            FIFOcost += purchaseValues[continueFrom][2]*purchaseValues[continueFrom][3]
+        else:
+            qty = 0
+            FIFOcost += purchaseValues[continueFrom][3]*qty
+    profit = qty*price - FIFOcost
+    return profit
+
 def sellStock(row, qty, price):
     global purchaseDict, salesDict, currentCash, sellCount, stockQTY
     if stockQTY.get(row["symbol"]) < qty:
         qty = stockQTY.get(row["symbol"])
     if qty != 0:
+        profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
         currentCash += qty*price
         sellCount += 1
-        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]  #Yet to do: Compute profit based on FIFO. Remove stock from purchaseDict. Compute new number of open stock holdings
-        
+        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]
+        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
     pass
 
-def calculateAvgPrc(purchaseDict, stock):
-    global stockQTY
+def calculateAvgPrc(purchaseDict):
     stocksList = sorted(data["symbol"].unique())
     avgPriceDict = {}
+    reversedDict = dict(reversed(list(purchaseDict.items())))
     for stock in stocksList:
-        if len(purchaseDict) == 0:
-            break
-        avgPrice = 0
-        for key, value in purchaseDict.items():
-            if value[0] == stock:
-                avgPrice += value[3]
-            else:
+        totalCost = 0
+        stockCount = stockQTY.get(stock)
+        for key, value in reversedDict.items():
+            if value[0] != stock:
                 continue
-        avgPriceDict[value[0]] = avgPrice/len(stockQTY.get(stock))
+            else:
+                if stockCount > value[2]:
+                    totalCost += value[3]*value[2]
+                    stockCount -= value[2]
+                else:
+                    totalCost += value[3]*stockCount
+                    stockCount = 0
+                    break
+        try:
+            avgCost = totalCost/stockQTY.get(stock)
+        except:
+            avgCost = "No Stock Owned"
+        avgPriceDict[stock] = avgCost
     return avgPriceDict
+                    
     
 def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code the strat here. Code of strategy would run iteratively for each row being iterated by the engine. This currently only accounts for one single stock traded
     global stockQTY
@@ -73,10 +116,10 @@ def strategy(startCash, currentCash, dataRow, currentPositions): #Idea is: Code 
                 buyStock(dataRow, 5, dataRow["close"]) #just a simple strategy to act as a placeholder
             if len(purchaseDict) != 0:
                 avgPriceDict = calculateAvgPrc(purchaseDict)
-            if avgPriceDict.get(dataRow["symbol"])*1.015 <= dataRow["high"]:
-                sellStock(dataRow, stockQTY.get(dataRow["symbol"]), avgPriceDict.get(dataRow["symbol"])*1.015)
+                if avgPriceDict.get(dataRow["symbol"])*1.015 <= dataRow["high"]:
+                    sellStock(dataRow, stockQTY.get(dataRow["symbol"]), avgPriceDict.get(dataRow["symbol"])*1.015)
                 
-def engineRun(startCash = 100000, data):
+def engineRun(data, startCash = 100000):
     global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY
     currentCash = startCash
     buyCount = 0
@@ -87,7 +130,18 @@ def engineRun(startCash = 100000, data):
         stockQTY[stock] = 0
     purchaseDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, PurchaseQTY, Price] ---- Row refers to the row of dataframe where stock is purchased
     salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
-    avgPrice = calculateAvgPrc()
+    for index, row in data.iterrows():
+        strategy(startCash, currentCash, row, stockQTY)
 
 #The logic behind this backtester can go two ways --- either have a static salesDict and purchaseDict where key-value pairs only get added, or have purchaseDict and salesDict to by dynamic to show current positions and total current sales
 #Ill try the second one for now. Logic --- strategy calls buyStock/sellStock function, which changes sales/purchase dict.
+
+
+#Yet to do:
+"""
+1) Post-Trade Statistics (e.g. total P/L? Number of Trades? Number of winning trades [this can be computed based on FIFO or Average-Based]?)
+2) More Complex Trading Strategy
+3) Model can currently buy and sell in the same time window (must eliminate so that scalping wont happen)
+4) PurchaseDict not updated if partial sale occurs (sell half of what was bought in a single purchase)
+5) 
+"""
