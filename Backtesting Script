@@ -5,6 +5,7 @@ from alpaca.data.timeframe import TimeFrame
 from datetime import datetime
 import pandas as pd
 
+
 #Notes:
 """Algorithm is allowed to purchase/sell stock at any price between the range of high and low. However, it cannot make this decision based on price information, nor can it make a sale AND a purchase in the same data row (ie the same minute).
     This means that the algorithm is not allowed to "know" the high and low prices, thus can only make decisions in a "hit-or-miss" manner. E.g. algorithm cannot choose to buy where price = row["Low"], but can make a decision like buy where price = 98%(Open)."""
@@ -23,7 +24,11 @@ def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
                                               end=endDateTime)
     barsData = stock_client.get_stock_bars(dataParams) #For some reason the Alpaca Documentation is slightly weird i cant directly pluck the parameters into the .get_stock_bars function, it only accepts one argument
     return barsData.df.reset_index()
-data = getData(["AAPL","NVDA"], datetime(2023,1,4), datetime(2023,1,5))
+
+startDate =  datetime(2023,1,4)
+endDate = datetime(2023,1,5)
+timePeriod = (startDate- endDate).days()*390 #390 trading minutes per trading day
+data = getData(["AAPL","NVDA"], startDate, endDate)
 def buyStock(row, qty, price): #Note: dont update trade og dictionary using merely timestamp as key because if diff types of stocks purchased at sqame time then new value will override
     global purchaseDict, currentCash, buyCount, stockQTY, buyStockCalled, sellStockCalled
     if sellStockCalled == False:
@@ -40,10 +45,8 @@ def buyStock(row, qty, price): #Note: dont update trade og dictionary using mere
             pass
 
 def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
-
+    global W,L, BE
     symbol = row["symbol"]
-    
-
     purchases = []
     for key, value in sorted(purchaseDict.items()):
         if value[0] == symbol:
@@ -53,7 +56,6 @@ def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
                 'price': value[3]
             })
     
-    # Get total shares already sold for this symbol
     total_sold_before = 0
     for key, value in salesDict.items():
         if value[0] == symbol:
@@ -81,6 +83,15 @@ def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
         fifo_cost += shares_to_use * purchase_price
         shares_to_cost -= shares_to_use
         shares_processed += purchase_qty
+        if purchase_price > sell_price:
+            for i in range(0, shares_to_use):
+                L.append(symbol)
+        elif sell_price > purchase_price:
+            for i in range(0, shares_to_use):
+                W.append(symbol)
+        else:
+            for i in range(0, shares_to_use):
+                BE.append(symbol) #gotta use append structure so that can track which stock wins, instead of just using a counter to see how many stocks win
     
     profit = (qty * sell_price) - fifo_cost
     
@@ -131,17 +142,23 @@ def strategy(startCash, currentCash, dataRow, currentPositions):
     global stockQTY, buyStockCalled, sellStockCalled
     #Simplified Strat:
     currentStock = dataRow["symbol"]
-    if stockQTY.get(currentStock) == 0:
-        buyStock(dataRow, 10, dataRow["open"])         ###Buy Strat Passed
-    elif stockQTY.get(currentStock) ==10:
-        sellStock(dataRow, 5, dataRow["close"])
+    sellStock(dataRow, 5, dataRow["close"])
                  
 
-#def tradeAnalyser():
+def tradeAnalyser(purchaseDict, salesDict, currentCash, stockQTY): #For simplicity this will be FIFO-based when calculating profits, etc. Come up with an average-based one afterwards
+    for stock in data["symbols"].unique():
+        salesFrequency = len({key, value for key, value in salesDict.items() if value[0] == stock})/timePeriod
+        purchaseFrequency = len({key, value for key, value in purchaseDict.items() if value[0] == stock})/timePeriod #purchases per minute
+        winRate_sales = (len([value for key, value in salesDict.items() if value[4] > 0 and value[0] == stock])/len(salesDict))*100 #NOT DONE YET: Sell ALL holdings and update purchaseDict and salesDict accordingly at end of trade session
+        winRate_perStock = (W.count(stock)/(W.count(stock)+L.count(stock)+BE.count(stock)))*100
+    
                 
 def engineRun(data, startCash = 100000):
-    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, buyStockCalled, sellStockCalled
+    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, buyStockCalled, sellStockCalled,W, L, BE
     currentCash = startCash
+    W = []
+    L = []
+    BE = []
     buyCount = 0
     sellCount = 0
     winningTradeCount = 0
@@ -154,11 +171,11 @@ def engineRun(data, startCash = 100000):
         sellStockCalled = False
     #tradeAnalyser()
 
-    return purchaseDict, salesDict, currentCash, stockQTY, currentCash
+    return purchaseDict, salesDict, currentCash, stockQTY
 
 
 
-a,b,c,d,e = engineRun(data, 50000)
+a,b,c,d = engineRun(data, 50000)
 
 totalPnL = 0
 for key, value in b.items():
@@ -171,7 +188,7 @@ for key, value in b.items():
 
     
 
-print("Purchases:\n",pd.DataFrame(a).transpose(),"\n\nSales:\n",pd.DataFrame(b).transpose(),"\nCash Remaining:   ",c,"\n\nEnd Portfolio:  ",d,"\nCash Remaining: ",e,"\nTotal Profit: ",totalPnL)
+print("Purchases:\n",pd.DataFrame(a).transpose(),"\n\nSales:\n",pd.DataFrame(b).transpose(),"\nCash Remaining:   ",c,"\n\nEnd Portfolio:  ",d,"\nTotal Profit: ",totalPnL)
 #The logic behind this backtester can go two ways --- either have a static salesDict and purchaseDict where key-value pairs only get added, or have purchaseDict and salesDict to by dynamic to show current positions and total current sales
 #Ill try the second one for now. Logic --- strategy calls buyStock/sellStock function, which changes sales/purchase dict.
 #Yet to do:
