@@ -24,51 +24,66 @@ def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
     barsData = stock_client.get_stock_bars(dataParams) #For some reason the Alpaca Documentation is slightly weird i cant directly pluck the parameters into the .get_stock_bars function, it only accepts one argument
     return barsData.df.reset_index()
 data = getData(["AAPL","NVDA"], datetime(2023,1,4), datetime(2023,1,5))
-def buyStock(row, qty, price):
+def buyStock(row, qty, price): #Note: dont update trade og dictionary using merely timestamp as key because if diff types of stocks purchased at sqame time then new value will override
     global purchaseDict, currentCash, buyCount, stockQTY, buyStockCalled, sellStockCalled
     if sellStockCalled == False:
         if qty*price > currentCash:
             qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
         if qty != 0:
+            key = "%s%s"%(row["symbol"],row["timestamp"])
             buyStockCalled = True
-            purchaseDict[row["timestamp"]] = [row["symbol"], row, qty, price]
+            purchaseDict[key] = [row["symbol"], row, qty, price]
             currentCash -= qty*price
             buyCount +=1
-            stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) + qty
+            stockQTY[row["symbol"]] = stockQTY.get(row["symbol"],0) + qty
         else:
             pass
 
-def calculateFIFOProfit(purchaseDict, salesDict, row, qty, price): #this function runs before sale is processed into salesDict!
-    totalSold = 0
-    netSold = 0
-    totalPurchased = 0
-    unchangedQTY = qty
+def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
+
+    symbol = row["symbol"]
+    
+
+    purchases = []
+    for key, value in sorted(purchaseDict.items()):
+        if value[0] == symbol:
+            purchases.append({
+                'timestamp': key,
+                'qty': value[2],
+                'price': value[3]
+            })
+    
+    # Get total shares already sold for this symbol
+    total_sold_before = 0
     for key, value in salesDict.items():
-        if value[0] == row["symbol"]:
-            totalSold += value[2]
-            netSold += value[2]
-    for key, value in purchaseDict.items():
-        if value[0] == row["symbol"]:
-            totalPurchased += value[2]
-            netSold -= value[2]
-        if netSold <= 0:
-            cutoffValue = value[3]
-            cutoffPoint = key
+        if value[0] == symbol:
+            total_sold_before += value[2]
+
+    shares_to_cost = qty  # How many shares to sell in this round of sale
+    fifo_cost = 0
+    shares_processed = 0
+    
+    for purchase in purchases:
+        if shares_to_cost <= 0:
             break
-    FIFOcost = netSold*(-1)*cutoffValue
-    qty -= netSold*(-1)
-    purchaseValues = list(purchaseDict.values()) #this is a 2D list
-    purchaseKeys = list(purchaseDict.keys())
-    continueFrom = purchaseKeys.index(cutoffPoint)-1
-    while qty > 0:
-        continueFrom += 1
-        if purchaseValues[continueFrom][2] < qty:
-            qty -= purchaseValues[continueFrom][2]
-            FIFOcost += purchaseValues[continueFrom][2]*purchaseValues[continueFrom][3]
-        else:
-            FIFOcost += purchaseValues[continueFrom][3]*qty
-            qty = 0
-    profit = unchangedQTY*price - FIFOcost
+            
+        purchase_qty = purchase['qty']
+        purchase_price = purchase['price']
+        
+        if shares_processed + purchase_qty <= total_sold_before:
+            shares_processed += purchase_qty
+            continue
+        
+        already_used = max(0, total_sold_before - shares_processed)
+        available_shares = purchase_qty - already_used
+        shares_to_use = min(available_shares, shares_to_cost)
+        
+        fifo_cost += shares_to_use * purchase_price
+        shares_to_cost -= shares_to_use
+        shares_processed += purchase_qty
+    
+    profit = (qty * sell_price) - fifo_cost
+    
     return profit
 
 def sellStock(row, qty, price):
@@ -77,6 +92,7 @@ def sellStock(row, qty, price):
         if stockQTY.get(row["symbol"]) < qty:
             qty = stockQTY.get(row["symbol"])
         if qty != 0:
+            key = "%s%s"%(row["symbol"],row["timestamp"])
             sellStockCalled = True
             profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
             currentCash += qty*price
@@ -111,53 +127,52 @@ def calculateAvgPrc(purchaseDict):
                     
     
 def strategy(startCash, currentCash, dataRow, currentPositions):
-    
+   
     global stockQTY, buyStockCalled, sellStockCalled
-    for stock in data["symbol"].unique():
-        buyStockCalled = False
-        sellStockCalled = False
-        if dataRow["symbol"] != stock:
-            continue
-        else:
-            if dataRow["close"] > dataRow["open"]:
-                buyStock(dataRow, 5, dataRow["close"]) #just a simple strategy to act as a placeholder
-            if len(purchaseDict) != 0:
-                avgPriceDict = calculateAvgPrc(purchaseDict)
-                if avgPriceDict.get(dataRow["symbol"])*1.015 <= dataRow["high"]:
-                    sellStock(dataRow, stockQTY.get(dataRow["symbol"]), avgPriceDict.get(dataRow["symbol"])*1.015)
+    #Simplified Strat:
+    currentStock = dataRow["symbol"]
+    if stockQTY.get(currentStock) == 0:
+        buyStock(dataRow, 10, dataRow["open"])         ###Buy Strat Passed
+    elif stockQTY.get(currentStock) ==10:
+        sellStock(dataRow, 5, dataRow["close"])
+                 
 
 #def tradeAnalyser():
                 
 def engineRun(data, startCash = 100000):
-    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY
+    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, buyStockCalled, sellStockCalled
     currentCash = startCash
     buyCount = 0
     sellCount = 0
     winningTradeCount = 0
-    stockQTY = {} #Key = Stock, Value = QTY
-    for stock in data["symbol"].unique():
-        stockQTY[stock] = 0
-    purchaseDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, PurchaseQTY, Price] ---- Row refers to the row of dataframe where stock is purchased
+    stockQTY = {stock: 0 for stock in data["symbol"].unique()}
+    purchaseDict = {}#Format of dict --- Key = Timestamp, Value = [Stock,Row, PurchaseQTY, Price] ---- Row refers to the row of dataframe where stock is purchased
     salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
     for index, row in data.iterrows():
         strategy(startCash, currentCash, row, stockQTY)
+        buyStockCalled = False
+        sellStockCalled = False
     #tradeAnalyser()
 
-    return purchaseDict, salesDict, currentCash, stockQTY
+    return purchaseDict, salesDict, currentCash, stockQTY, currentCash
 
 
 
-a,b,c,d = engineRun(data, 50000)
+a,b,c,d,e = engineRun(data, 50000)
+
+totalPnL = 0
+for key, value in b.items():
+    totalPnL += value[4]
+    
 for key, value in a.items():
     a[key] = value[:1] + value[2:]
 for key, value in b.items():
     b[key] = value[:1] + value[2:]    
+
     
-print("Purchases:\n",a,"\n\nSales:\nb",b,"Cash Remaining:   ",c,"\n\nEnd Portfolio:\n",d)
+
+print("Purchases:\n",pd.DataFrame(a).transpose(),"\n\nSales:\n",pd.DataFrame(b).transpose(),"\nCash Remaining:   ",c,"\n\nEnd Portfolio:  ",d,"\nCash Remaining: ",e,"\nTotal Profit: ",totalPnL)
 #The logic behind this backtester can go two ways --- either have a static salesDict and purchaseDict where key-value pairs only get added, or have purchaseDict and salesDict to by dynamic to show current positions and total current sales
 #Ill try the second one for now. Logic --- strategy calls buyStock/sellStock function, which changes sales/purchase dict.
 #Yet to do:
-"""
-1) Post-Trade Statistics (e.g. total P/L? Number of Trades? Number of winning trades [this can be computed based on FIFO or Average-Based]?)
-2) Tidy up results output
-"""
+#1) Post-Trade Statistics (e.g. total P/L? Number of Trades? Number of winning trades [this can be computed based on FIFO or Average-Based]?)
