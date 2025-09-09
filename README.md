@@ -6,3 +6,10 @@ Data from: https://app.alpaca.markets/brokerage/new-account
 This will be a CSV-backed engine, no sql database
 
 This project is still in progress. While the backtesting engine works, the post-trade analytics tool has yet to be developed
+
+
+
+
+IMPORTANT!!!!!!!!!
+______________________
+Must remember to make it such that all positions are closed at final price once trade session ends
