@@ -1,5 +1,4 @@
-
-  import os
+import os
 from alpaca.data import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
@@ -8,7 +7,7 @@ import pandas as pd
 
 
 #Notes:
-"""Algorithm is allowed to purchase/sell stock at any price between the range of high and low. However, it cannot make this decision based on price information, nor can it make a sale AND a purchase in the same data row (ie the same minute).
+"""Algorithm is allowed to purchase/sell stock at any price between the range of high and low. However, it cannot make this decision based on price information.
     This means that the algorithm is not allowed to "know" the high and low prices, thus can only make decisions in a "hit-or-miss" manner. E.g. algorithm cannot choose to buy where price = row["Low"], but can make a decision like buy where price = 98%(Open)."""
 #For future use --- row.name returns index of row
 #Next step for algorithm is to have it do simple trade analysis, as well as tell the user how much more(or less) they would have made if x extra money were put into the trading account when it holds positions till out of cash
@@ -31,19 +30,17 @@ endDate = datetime(2023,1,5)
 timePeriod = (endDate-startDate).days*390 #390 trading minutes per trading day
 data = getData(["AAPL","NVDA"], startDate, endDate)
 def buyStock(row, qty, price): #Note: dont update trade og dictionary using merely timestamp as key because if diff types of stocks purchased at sqame time then new value will override
-    global purchaseDict, currentCash, buyCount, stockQTY, buyStockCalled, sellStockCalled
-    if sellStockCalled == False:
-        if qty*price > currentCash:
-            qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
-        if qty != 0:
-            key = "%s%s"%(row["symbol"],row["timestamp"])
-            buyStockCalled = True
-            purchaseDict[key] = [row["symbol"], row, qty, price]
-            currentCash -= qty*price
-            buyCount +=1
-            stockQTY[row["symbol"]] = stockQTY.get(row["symbol"],0) + qty
-        else:
-            pass
+    global purchaseDict, currentCash, buyCount, stockQTY
+    if qty*price > currentCash:
+        qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
+    if qty != 0:
+        key = "%s%s"%(row["symbol"],row.name)
+        purchaseDict[key] = [str(row["symbol"]), row, qty, price]
+        currentCash -= qty*price
+        buyCount +=1
+        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"],0) + qty
+    else:
+        pass
 
 def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
     global W,L, BE
@@ -99,18 +96,16 @@ def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
     return profit
 
 def sellStock(row, qty, price):
-    global purchaseDict, salesDict, currentCash, sellCount, stockQTY, sellStockCalled, buyStockCalled #buystockcalled and sellstockcalled prevents model from buying and selling stock at the same candle
-    if buyStockCalled == False:
-        if stockQTY.get(row["symbol"].iloc[0]) < qty:
-            qty = stockQTY.get(row["symbol"])
-        if qty != 0:
-            key = "%s%s"%(row["symbol"],row["timestamp"])
-            sellStockCalled = True
-            profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
-            currentCash += qty*price
-            sellCount += 1
-            salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]
-            stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
+    global purchaseDict, salesDict, currentCash, sellCount, stockQTY
+    if stockQTY.get(row["symbol"]) < qty:
+        qty = stockQTY.get(row["symbol"])
+    if qty != 0:
+        key = "%s%s"%(row["symbol"],row.name)
+        profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
+        currentCash += qty*price
+        sellCount += 1
+        salesDict[key] = [str(row["symbol"]), row, qty, price, profit]
+        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
 
 def calculateAvgPrc(purchaseDict):
     stocksList = sorted(data["symbol"].unique())
@@ -140,7 +135,7 @@ def calculateAvgPrc(purchaseDict):
     
 def strategy(startCash, currentCash, dataRow, currentPositions):
    
-    global stockQTY, buyStockCalled, sellStockCalled
+    global stockQTY
     #Simplified Strat:
     currentStock = dataRow["symbol"]
     if stockQTY.get(currentStock) == 0:
@@ -156,7 +151,7 @@ def tradeAnalyser(purchaseDict, salesDict, currentCash, stockQTY): #For simplici
     
                 
 def engineRun(data, startCash = 100000):
-    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, buyStockCalled, sellStockCalled,W, L, BE
+    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, W, L, BE
     currentCash = startCash
     W = []
     L = []
@@ -167,16 +162,12 @@ def engineRun(data, startCash = 100000):
     stockQTY = {stock: 0 for stock in data["symbol"].unique()}
     purchaseDict = {}#Format of dict --- Key = Timestamp, Value = [Stock,Row, PurchaseQTY, Price] ---- Row refers to the row of dataframe where stock is purchased
     salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
-    buyStockCalled = False
-    sellStockCalled = False
     for index, row in data.iterrows():
         strategy(startCash, currentCash, row, stockQTY)
-        buyStockCalled = False
-        sellStockCalled = False
     #tradeAnalyser()
 
     for stock in data["symbol"].unique():
-        lastRow = data.loc[data["symbol"] == stock].tail(1)
+        lastRow = data.loc[data["symbol"] == stock].tail(1).iloc[0] #note to future: .iloc[0] converts one-row DF into a pd series
         qtyLeft = stockQTY.get(stock)
         sellStock(lastRow, qtyLeft, lastRow["close"])
     
@@ -202,3 +193,6 @@ print("Purchases:\n",pd.DataFrame(a).transpose(),"\n\nSales:\n",pd.DataFrame(b).
 #Ill try the second one for now. Logic --- strategy calls buyStock/sellStock function, which changes sales/purchase dict.
 #Yet to do:
 #1) Post-Trade Statistics (e.g. total P/L? Number of Trades? Number of winning trades [this can be computed based on FIFO or Average-Based]?)
+
+#Limitations:
+#Algorithm is only allowed to conduct ONE SET of buy/sell action at most per candle
