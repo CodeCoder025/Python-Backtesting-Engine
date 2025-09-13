@@ -140,9 +140,15 @@ def strategy(startCash, currentCash, dataRow, currentPositions):
     currentStock = dataRow["symbol"]
     if stockQTY.get(currentStock) == 0:
         buyStock(dataRow, 5, dataRow["open"])
-                 
 
-def tradeAnalyser(startCash, purchaseDict, salesDict, currentCash, stockQTY):
+def calculateAlpha(data, stock, netProfitStock, startCash):
+    filteredData = data.loc[data["symbol"] == stock]
+    noTradeGain = (filteredData.head(1).iloc[0]["open"] - filteredData.tail(1).iloc[0]["close"])*(startCash/filteredData.head(1).iloc[0]["open"]) #for future use of this value do note that there exists a possibility of this being negative
+    alphaRaw = netProfitStock - noTradeGain #shit this noTradeGain is per stock. How should i calculate alpha... 
+    
+
+
+def tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQTY):
     global timePeriod
     nCandles = timePeriod
     analysisAvailable = {stock : None for stock in data["symbol"].unique()}
@@ -159,7 +165,8 @@ def tradeAnalyser(startCash, purchaseDict, salesDict, currentCash, stockQTY):
         purchaseFrequency = sum(1 for key, value in purchaseDict.items() if value[0] == stock)/timePeriod
         winRate_sales = (len([value for key, value in salesDict.items() if value[4] > 0 and value[0] == stock])/sum(1 for key, value in salesDict.items() if value[0] == stock))*100
         winRate_perStock = (W.count(stock)/(W.count(stock)+L.count(stock)+BE.count(stock)))*100
-        #alpha = ... how much more/less would have been earned if stock were bought at the start and held to the end of trade session
+        alphaPercent, alphaRaw, noTradeGain = calculateAlpha(data, stock, netProfit, startCash)
+        #averageHoldingTime --- from this can calculate average number of stocks held in portfolio over the whole trading period
 
 
                 
@@ -183,7 +190,7 @@ def engineRun(data, startCash = 100000):
         qtyLeft = stockQTY.get(stock)
         sellStock(lastRow, qtyLeft, lastRow["close"])
 
-    tradeAnalyser(startCash, purchaseDict, salesDict, currentCash, stockQTY)
+    tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQTY)
     
     return purchaseDict, salesDict, currentCash, stockQTY
 
