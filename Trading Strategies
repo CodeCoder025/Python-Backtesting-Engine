@@ -1,0 +1,16 @@
+Strategies to use for backtesting engine:
+##**DO NOTE THAT INDENTATIONS MAY BE MESSED UP!**##
+
+
+Placeholder
+_________________
+    Strategy (1P):
+      """currentStock = dataRow["symbol"]
+        if stockQTY.get(currentStock) == 0:
+        buyStock(dataRow, 5, dataRow["open"])"""
+
+
+
+
+Feasible
+_________________
