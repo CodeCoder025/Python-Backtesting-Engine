@@ -12,6 +12,7 @@ import pandas as pd
 #For future use --- row.name returns index of row
 #Next step for algorithm is to have it do simple trade analysis, as well as tell the user how much more(or less) they would have made if x extra money were put into the trading account when it holds positions till out of cash
 #for simplicity, all profit calculated is FIFO-based
+#Evaluate strengths and weaknesses of FIFO-based calculation, and put in README file
 
 apiKey = os.getenv("AlpacaKey")
 apiSecret = os.getenv("AlpacaSecret")
@@ -29,6 +30,8 @@ startDate =  datetime(2023,1,4)
 endDate = datetime(2023,1,5)
 timePeriod = (endDate-startDate).days*390 #390 trading minutes per trading day
 data = getData(["AAPL","NVDA"], startDate, endDate)
+portfolioAtThisTrade = {stock: [] for stock in data["symbol"].unique()}
+capitalInMarketAtThisTrade = {stock:[] for stock in data["symbol"].unique()} #Think: is it correct to say that capital in market for a stock X at time Y is = (total portfolio value of X - paper P/L of X at time Y) or simply = value of stock Xs in purchaseDict that have yet to be sold
 def buyStock(row, qty, price): #Note: dont update trade og dictionary using merely timestamp as key because if diff types of stocks purchased at sqame time then new value will override
     global purchaseDict, currentCash, buyCount, stockQTY
     if qty*price > currentCash:
@@ -39,9 +42,19 @@ def buyStock(row, qty, price): #Note: dont update trade og dictionary using mere
         currentCash -= qty*price
         buyCount +=1
         stockQTY[row["symbol"]] = stockQTY.get(row["symbol"],0) + qty
+        portfolioAtThisTrade[row["symbol"]].append(stockQTY.get(row["symbol"])
     else:
         pass
 
+def calculatePaperProfit(purchaseDict, salesDict, row, stockQTY): #Also FIFO-based. THis only deals with one specific type of stock, specified in row
+    stockOfInterest = row["symbol"]
+    nStockLeft = stockQTY.get(stockOfInterest)
+    if nStockLeft == 0:
+        return 0
+    else:
+        stripPurchaseDict = {} #Structure: Key1:Value1 = quantity of stock in first purchase, value of stock at first purchase --- this allows for easy calculation of capital poured into current holdings
+        for key, value in purchaseDict.items():
+            
 def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
     global W,L, BE
     symbol = row["symbol"]
@@ -106,6 +119,7 @@ def sellStock(row, qty, price):
         sellCount += 1
         salesDict[key] = [str(row["symbol"]), row, qty, price, profit]
         stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
+        portfolioAtThisTrade[row["symbol"]].append(stockQTY.get(row["symbol"])
 
 def calculateAvgPrc(purchaseDict):
     stocksList = sorted(data["symbol"].unique())
@@ -141,10 +155,14 @@ def strategy(startCash, currentCash, dataRow, currentPositions):
     if stockQTY.get(currentStock) == 0:
         buyStock(dataRow, 5, dataRow["open"])
 
-def calculateAlpha(data, stock, netProfitStock, startCash):
+def calculateAlpha(data, stock, netProfitStock, startCash): #There is a problem in calculation --- capital cannot be said to be startCash because this is per stock. Think: would it be fair to use average portfolio holding quantity for each type of stock to calculate? Conclusion: Capital for trades for an individual stock will be defined to be the greatest amount of capital invested into specific stock in portfolio at any point in time
     filteredData = data.loc[data["symbol"] == stock]
-    noTradeGain = (filteredData.head(1).iloc[0]["open"] - filteredData.tail(1).iloc[0]["close"])*(startCash/filteredData.head(1).iloc[0]["open"]) #for future use of this value do note that there exists a possibility of this being negative
-    alphaRaw = netProfitStock - noTradeGain #shit this noTradeGain is per stock. How should i calculate alpha... 
+    noTradeGain = (filteredData.head(1).iloc[0]["open"] - filteredData.tail(1).iloc[0]["close"])*("""change this to be capital for the specific stock"""/filteredData.head(1).iloc[0]["open"]) #for future use of this value do note that there exists a possibility of this being negative
+    alphaRaw = netProfitStock - noTradeGain #alpha will likely be negative if only a small percentage of capital is used to trade
+    alphaPct =
+    #alpharaw is the dollar value of how much algorithm has beat the market by, in USD
+    #alphaPct, on the other hand, is the percentage which the algo has beaten the market by. This is in percentage points --- ie if market profits 8% and algo profits 10%, alphaPct = 2%, not 20%.
+    
     
 
 
@@ -152,7 +170,7 @@ def tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQT
     global timePeriod
     nCandles = timePeriod
     analysisAvailable = {stock : None for stock in data["symbol"].unique()}
-    for stock in data["symbol"].unique(): #DONT FORGET THAT THIS IS FOR EACH STOCK!!! These values must be stored before next iteration of for loop
+    for stock in data["symbol"].unique(): #DONT FORGET THAT THIS IS FOR EACH STOCK!!! These values must be stored before they are overwritten by next iteration of for loop
         if sum(1 for key, value in purchaseDict.items() if value[0] == stock) == 0:
             analysisAvailable[stock] = False
             continue
@@ -165,6 +183,9 @@ def tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQT
         purchaseFrequency = sum(1 for key, value in purchaseDict.items() if value[0] == stock)/timePeriod
         winRate_sales = (len([value for key, value in salesDict.items() if value[4] > 0 and value[0] == stock])/sum(1 for key, value in salesDict.items() if value[0] == stock))*100
         winRate_perStock = (W.count(stock)/(W.count(stock)+L.count(stock)+BE.count(stock)))*100
+        maxStock = max(portfolioAtThisTrade.get(stock))
+        #largest holding value --- this does not equate to definition of "trade capital" in alpha function above
+        
         alphaPercent, alphaRaw, noTradeGain = calculateAlpha(data, stock, netProfit, startCash)
         #averageHoldingTime --- from this can calculate average number of stocks held in portfolio over the whole trading period
 
