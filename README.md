@@ -5,8 +5,10 @@ Data from: https://app.alpaca.markets/brokerage/new-account
 
 This will be a CSV-backed engine, no sql database
 
-This project is still in progress. While the backtesting engine works, the post-trade analytics tool has yet to be developed
+This project is still in progress. While the backtesting engine works, the post-trade analytics tool is still in the process of being developed.
+Since the code is incomplete, running the code will return errors.
 
+Target to finish the analytics tool by 10th Oct
 
 
 
