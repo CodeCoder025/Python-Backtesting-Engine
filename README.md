@@ -18,5 +18,5 @@ Must remember to make it such that all positions are closed at final price once 
 
 
 
-Planned update path / future changes (this is PRIVATE!):
+Planned update path / feasible stock trading strategies (this is PRIVATE!):
 https://docs.google.com/document/d/1gL_6qlcGeiDzzHlxFqGG686iXOYxIAoqoXFa4ODVVAw/edit?tab=t.0
