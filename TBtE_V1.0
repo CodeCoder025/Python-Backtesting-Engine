@@ -1,0 +1,179 @@
+##Notes:
+"""This is version one of my Python trade backtesting engine. This backtesting engine includes the bare minimum of features needed to run and carry out its functions properly. It can accomodate an iterative strategy which would be executed once per candle (using the Alpacca Free Plan, that would be once per market minute if market volume > 0 in that candle).
+   Strategies which do after-hours or premarket trading are not supported. Strategies which are not meant to be run iteratively per minute are to be specifically stated by editing the backtesting engine itself (under the "engine" function).
+   Below is some simple documentation to this version of the engine, for ease of strategy programming:
+         Standard Python syntax applies.
+           buyStock() and sellStock() buy and sell a stock respectively, and automatically update the required accounting/trade logs to make these changes. Trade volume is not taken into account, thus trade will always go through, as though market has unlimited liquidity.
+           stock data for a specific row can be pulled by calling the "dataRow" dataframe. Data columns that can be called are "high", "low", "open", "close", "volume", "trade_count", "vwap"(volume weighted average price), "symbol", "timestamp"
+
+  Trading multiple stocks:
+        This backtesting engine currently DOES SUPPORT a multi-stock strategy, but tickers of all stocks to trade must be stated when calling for the dataframe. Note that the strategy would be applied to all stocks WITHOUT ANY DISTINcTION, thus for stocks to be handled distinctly, the user would have to program this mannually in the strategy (e.g. if dataRow["symbol"] == stockA, ... (then do the stockA strategy))
+"""
+
+#This backtesting engine is coded by CodeCoder025. Feel free to contact me at limky42710@gmail.com.
+
+
+
+import os
+from alpaca.data import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from datetime import datetime
+import pandas as pd
+
+apiKey = os.getenv("AlpacaKey")
+apiSecret = os.getenv("AlpacaSecret")
+stock_client = StockHistoricalDataClient(apiKey, apiSecret)
+
+def getData(stock, startDateTime, endDateTime,interval=TimeFrame.Minute):
+    dataParams = StockBarsRequest(symbol_or_symbols=stock,
+                                            timeframe=interval, 
+                                            start=startDateTime,
+                                              end=endDateTime)
+    barsData = stock_client.get_stock_bars(dataParams) #For some reason the Alpaca Documentation is slightly weird i cant directly pluck the parameters into the .get_stock_bars function, it only accepts one argument
+    return barsData.df.reset_index()
+
+data = getData(["AAPL","NVDA"], datetime(2023,1,4), datetime(2023,1,5))
+
+def buyStock(row, qty, price): #Note: dont update trade og dictionary using merely timestamp as key because if diff types of stocks purchased at sqame time then new value will override
+    global purchaseDict, currentCash, buyCount, stockQTY, buyStockCalled, sellStockCalled
+    if qty*price > currentCash:
+        qty = int(currentCash/price) #Buys as many stocks as possible if full order cannot be fufilled
+    if qty != 0:
+        key = "%s%s"%(row["symbol"],row["timestamp"])
+        buyStockCalled = True
+        purchaseDict[key] = [row["symbol"], row, qty, price]
+        currentCash -= qty*price
+        buyCount +=1
+        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"],0) + qty
+    else:
+        pass
+
+def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
+
+    symbol = row["symbol"]
+    
+
+    purchases = []
+    for key, value in sorted(purchaseDict.items()):
+        if value[0] == symbol:
+            purchases.append({
+                'timestamp': key,
+                'qty': value[2],
+                'price': value[3]
+            })
+    
+    # Get total shares already sold for this symbol
+    total_sold_before = 0
+    for key, value in salesDict.items():
+        if value[0] == symbol:
+            total_sold_before += value[2]
+
+    shares_to_cost = qty  # How many shares to sell in this round of sale
+    fifo_cost = 0
+    shares_processed = 0
+    
+    for purchase in purchases:
+        if shares_to_cost <= 0:
+            break
+            
+        purchase_qty = purchase['qty']
+        purchase_price = purchase['price']
+        
+        if shares_processed + purchase_qty <= total_sold_before:
+            shares_processed += purchase_qty
+            continue
+        
+        already_used = max(0, total_sold_before - shares_processed)
+        available_shares = purchase_qty - already_used
+        shares_to_use = min(available_shares, shares_to_cost)
+        
+        fifo_cost += shares_to_use * purchase_price
+        shares_to_cost -= shares_to_use
+        shares_processed += purchase_qty
+    
+    profit = (qty * sell_price) - fifo_cost
+    
+    return profit
+
+def sellStock(row, qty, price):
+    global purchaseDict, salesDict, currentCash, sellCount, stockQTY, sellStockCalled, buyStockCalled #buystockcalled and sellstockcalled prevents model from buying and selling stock at the same candle
+    if stockQTY.get(row["symbol"]) < qty:
+        qty = stockQTY.get(row["symbol"])
+    if qty != 0:
+        key = "%s%s"%(row["symbol"],row["timestamp"])
+        sellStockCalled = True
+        profit = calculateFIFOProfit(purchaseDict, salesDict, row, qty, price)
+        currentCash += qty*price
+        sellCount += 1
+        salesDict[row["timestamp"]] = [row["symbol"], row, qty, price, profit]
+        stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
+
+def calculateAvgPrc(purchaseDict):
+    stocksList = sorted(data["symbol"].unique())
+    avgPriceDict = {}
+    reversedDict = dict(reversed(list(purchaseDict.items())))
+    for stock in stocksList:
+        totalCost = 0
+        stockCount = stockQTY.get(stock)
+        for key, value in reversedDict.items():
+            if value[0] != stock:
+                continue
+            else:
+                if stockCount > value[2]:
+                    totalCost += value[3]*value[2]
+                    stockCount -= value[2]
+                else:
+                    totalCost += value[3]*stockCount
+                    stockCount = 0
+                    break
+        try:
+            avgCost = totalCost/stockQTY.get(stock)
+        except:
+            avgCost = 0
+        avgPriceDict[stock] = avgCost
+    return avgPriceDict
+                    
+    
+def strategy(startCash, currentCash, dataRow, currentPositions):
+   
+    global stockQTY, buyStockCalled, sellStockCalled
+    #Simplified Strat:
+    currentStock = dataRow["symbol"]
+    if stockQTY.get(currentStock) == 0:
+        buyStock(dataRow, 10, dataRow["open"])         ###Buy Strat Passed
+    elif stockQTY.get(currentStock) ==10:
+        sellStock(dataRow, 5, dataRow["close"])
+                 
+
+#def tradeAnalyser():
+                
+def engineRun(data, startCash = 100000):
+    global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, buyStockCalled, sellStockCalled
+    currentCash = startCash
+    buyCount = 0
+    sellCount = 0
+    winningTradeCount = 0
+    stockQTY = {stock: 0 for stock in data["symbol"].unique()}
+    purchaseDict = {}#Format of dict --- Key = Timestamp, Value = [Stock,Row, PurchaseQTY, Price] ---- Row refers to the row of dataframe where stock is purchased
+    salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
+    for index, row in data.iterrows():
+        strategy(startCash, currentCash, row, stockQTY)
+    #tradeAnalyser()
+
+    return purchaseDict, salesDict, currentCash, stockQTY, currentCash
+
+
+
+a,b,c,d,e = engineRun(data, 50000)
+
+totalPnL = 0
+for key, value in b.items():
+    totalPnL += value[4]
+    
+for key, value in a.items():
+    a[key] = value[:1] + value[2:]
+for key, value in b.items():
+    b[key] = value[:1] + value[2:]
+
+print("Purchases:\n",pd.DataFrame(a).transpose(),"\n\nSales:\n",pd.DataFrame(b).transpose(),"\nCash Remaining:   ",c,"\n\nEnd Portfolio:  ",d,"\nTotal Profit: ",totalPnL)
