@@ -29,6 +29,7 @@ timePeriod = (endDate-startDate).days*390 #390 trading minutes per trading day
 data = getData(["AAPL","NVDA"], startDate, endDate)
 portfolioAtThisTrade = {stock: [] for stock in data["symbol"].unique()}
 capitalInMarketAtThisTrade = {stock:[] for stock in data["symbol"].unique()} #Think: is it correct to say that capital in market for a stock X at time Y is = (total portfolio value of X - paper P/L of X at time Y) or simply = value of stock Xs in purchaseDict that have yet to be sold
+stockMinute = {stock:0 for stock in data["symbol"].unique()} #1 stock minute is 1 stock held for 1 minute. Essential for later calculations
 def buyStock(row, qty, price): #Note: dont update trade og dictionary using merely timestamp as key because if diff types of stocks purchased at sqame time then new value will override
     global purchaseDict, currentCash, buyCount, stockQTY, salesDict
     if qty*price > currentCash:
@@ -40,7 +41,7 @@ def buyStock(row, qty, price): #Note: dont update trade og dictionary using mere
         buyCount +=1
         stockQTY[row["symbol"]] = stockQTY.get(row["symbol"],0) + qty
         portfolioAtThisTrade[row["symbol"]].append(stockQTY.get(row["symbol"]))
-        _, capitalIn = calculatePaperProfit(purchaseDict, salesDict, row, stockQTY)
+        capitalIn = calculatePaperProfit(purchaseDict, salesDict, row, stockQTY)
         capitalInMarketAtThisTrade[row["symbol"]].append(capitalIn)
     else:
         pass
@@ -60,6 +61,7 @@ def calculatePaperProfit(purchaseDict, salesDict, row, stockQTY): #Also FIFO-bas
     principalSumOfCurrentHolding = 0
     for key, value in stripPurchaseDict.items():
         _, qty = key.split("|")
+        qty = int(qty)
         if nStockLeft == 0:
             break
         if qty <= nStockLeft:
@@ -71,7 +73,7 @@ def calculatePaperProfit(purchaseDict, salesDict, row, stockQTY): #Also FIFO-bas
             nStockLeft = 0
     valueOfCurrentHolding = stockQTY.get(stockOfInterest)*((row["open"]+row["close"])/2)
     paperProfit = valueOfCurrentHolding-principalSumOfCurrentHolding
-    return paperProfit, principalSumOfCurrentHolding
+    return principalSumOfCurrentHolding
             
             
 def calculateFIFOProfit(purchaseDict, salesDict, row, qty, sell_price):
@@ -138,8 +140,8 @@ def sellStock(row, qty, price):
         sellCount += 1
         salesDict[key] = [str(row["symbol"]), row, qty, price, profit]
         stockQTY[row["symbol"]] = stockQTY.get(row["symbol"]) - qty
-        portfolioAtThisTrade[row["symbol"]].append(stockQTY.get(row["symbol"])
-        _, capitalIn = calculatePaperProfit(purchaseDict, salesDict, row, stockQTY)
+        portfolioAtThisTrade[row["symbol"]].append(stockQTY.get(row["symbol"]))
+        capitalIn = calculatePaperProfit(purchaseDict, salesDict, row, stockQTY)
         capitalInMarketAtThisTrade[row["symbol"]].append(capitalIn)
 
 def calculateAvgPrc(purchaseDict):
@@ -180,37 +182,51 @@ def calculateAlpha(data, stock, netProfitStock, startCash):
     definedCapital = max(value for key, value in capitalInMarketAtThisTrade.items() if key == stock)
     noTradeGain = (filteredData.head(1).iloc[0]["open"] - filteredData.tail(1).iloc[0]["close"])*(definedCapital/filteredData.head(1).iloc[0]["open"]) #for future use of this value do note that there exists a possibility of this being negative
     alphaRaw = netProfitStock - noTradeGain #alpha will likely be negative if only a small percentage of capital is used to trade
-    alphaPct =
+    alphaPct = (alphaRaw/definedCapital)*100
     #alpharaw is the dollar value of how much algorithm has beat the market by, in USD
     #alphaPct, on the other hand, is the percentage which the algo has beaten the market by. This is in percentage points --- ie if market profits 8% and algo profits 10%, alphaPct = 2%, not 20%.
-    
+    return alphaPct, alphaRaw, noTradeGain
     
 
 
 def tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQTY):
-    global timePeriod
+    global timePeriod, stockMinute
     nCandles = timePeriod
-    analysisAvailable = {stock : None for stock in data["symbol"].unique()}
+    analysisDict ={}
     for stock in data["symbol"].unique(): #DONT FORGET THAT THIS IS FOR EACH STOCK!!! These values must be stored before they are overwritten by next iteration of for loop
         if sum(1 for key, value in purchaseDict.items() if value[0] == stock) == 0:
-            analysisAvailable[stock] = False
-            continue
-        analysisAvailable[stock] = True
-        netProfit = sum(value[4] for key, value in salesDict.items() if value[0] == stock)
-        dollarVolume = sum(value[3]*value[2] for key, value in purchaseDict.items() if value[0] == stock)
-        revenue = sum(value[3]*value[2] for key, value in salesDict.items() if value[0] == stock)
-        print(revenue-dollarVolume == netProfit) #This does indeed retunr true
-        salesFrequency = sum(1 for key, value in salesDict.items() if value[0] == stock)/timePeriod
-        purchaseFrequency = sum(1 for key, value in purchaseDict.items() if value[0] == stock)/timePeriod
-        winRate_sales = (len([value for key, value in salesDict.items() if value[4] > 0 and value[0] == stock])/sum(1 for key, value in salesDict.items() if value[0] == stock))*100
-        winRate_perStock = (W.count(stock)/(W.count(stock)+L.count(stock)+BE.count(stock)))*100
-        maxStock = max(portfolioAtThisTrade.get(stock))
-        #largest holding value --- this does not equate to definition of "trade capital" in alpha function above
+            analysisAvailable = False
+            analysisDict[stock] = False
+        else:
+            analysisAvailable= True
+            netProfit = sum(value[4] for key, value in salesDict.items() if value[0] == stock)
+            dollarVolume = sum(value[3]*value[2] for key, value in purchaseDict.items() if value[0] == stock)
+            revenue = sum(value[3]*value[2] for key, value in salesDict.items() if value[0] == stock)
+            print(revenue-dollarVolume == netProfit) #This does indeed retunr true
+            salesFrequency = sum(1 for key, value in salesDict.items() if value[0] == stock)/timePeriod
+            purchaseFrequency = sum(1 for key, value in purchaseDict.items() if value[0] == stock)/timePeriod
+            winRate_sales = (len([value for key, value in salesDict.items() if value[4] > 0 and value[0] == stock])/sum(1 for key, value in salesDict.items() if value[0] == stock))*100
+            winRate_perStock = (W.count(stock)/(W.count(stock)+L.count(stock)+BE.count(stock)))*100
+            maxStock = max(portfolioAtThisTrade.get(stock))
+            alphaPercent, alphaRaw, noTradeGain = calculateAlpha(data, stock, netProfit, startCash)
+            averageHoldingTime = (stockMinute.get(stock))/sum(value for key, value in purchaseDict.items())
+            analysisDF = pd.DataFrame({"Net Profit":netProfit,
+                                       "Revenue":revenue,
+                                       "Dollar Volume":dollarVolume,
+                                       "Sales Frequency":salesFrequency,
+                                       "Purchase Frequency":purchaseFrequency,
+                                       "Win Rate on Sales":winRate_sales,
+                                       "Win Rate per Stock":winRate_perStock,
+                                       "Maximum Holding Count":maxStock,
+                                       "Alpha":"$%s, or %s%"%(alphaRaw,alphaPercent),
+                                       "Average Holding Time":averageHoldingTime})
+            analysisDict[stock] = analysisDF
+    return analysisDict
         
-        alphaPercent, alphaRaw, noTradeGain = calculateAlpha(data, stock, netProfit, startCash)
-        #averageHoldingTime --- from this can calculate average number of stocks held in portfolio over the whole trading period
 
-
+def calculateStockMinute(row, stockQTY):
+    global stockMinute
+    stockMinute[row["symbol"]] += stockQTY.get(row["symbol"])
                 
 def engineRun(data, startCash = 100000):
     global purchaseDict, salesDict, currentCash, buyCount, sellCount, winningTradeCount, stockQTY, W, L, BE
@@ -226,16 +242,15 @@ def engineRun(data, startCash = 100000):
     salesDict = {} #Format of dict --- Key = Timestamp, Value = [Stock,Row, SellQTY, Price, Profit] --- to determine which exact stock is sold, use FIFO logic
     for index, row in data.iterrows():
         strategy(startCash, currentCash, row, stockQTY)
-
+        calculateStockMinute(row, stockQTY)
     for stock in data["symbol"].unique():
         lastRow = data.loc[data["symbol"] == stock].tail(1).iloc[0] #note to future: .iloc[0] converts one-row DF into a pd series
         qtyLeft = stockQTY.get(stock)
         sellStock(lastRow, qtyLeft, lastRow["close"])
 
-    tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQTY)
+    analysis = tradeAnalyser(data, startCash, purchaseDict, salesDict, currentCash, stockQTY)
     
     return purchaseDict, salesDict, currentCash, stockQTY
-
 
 
 a,b,c,d = engineRun(data, 50000)
@@ -252,6 +267,8 @@ for key, value in b.items():
     
 
 print("Purchases:\n",pd.DataFrame(a).transpose(),"\n\nSales:\n",pd.DataFrame(b).transpose(),"\nCash Remaining:   ",c,"\n\nEnd Portfolio:  ",d,"\nTotal Profit: ",totalPnL)
+print(analysis)
 
 #Limitations:
 #Algorithm is only allowed to conduct ONE SET of buy/sell action at most per candle
+#Algo assumes infinite liquidity in market
