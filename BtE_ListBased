@@ -1,0 +1,1 @@
+#Alternative version of the backtesting engine, which, instead of taking in a trade strategy, takes in lists of buy/sell prices for specific dates as input. This is best suited for backtesting ML stock predictors
